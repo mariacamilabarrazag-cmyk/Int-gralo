@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Integralo · Entrar</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="auth-page">
+  <main class="auth-card">
+    <div class="auth-brand"><span class="logo-mark">◆</span> Integralo</div>
+    <p class="auth-tag">Pedidos, atención al cliente con IA y seguimiento de tu tienda, en un solo lugar.</p>
+
+    <form id="login-form" class="auth-form">
+      <h1>Entrar</h1>
+      <label>Correo<input name="email" type="email" autocomplete="email" required></label>
+      <label>Contraseña<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="btn" type="submit">Entrar</button>
+      <p class="hint">¿Nueva tienda? <a href="/registro" data-switch>Crea tu cuenta</a></p>
+    </form>
+
+    <form id="register-form" class="auth-form" hidden>
+      <h1>Crea la cuenta de tu tienda</h1>
+      <label>Nombre de tu negocio<input name="business_name" required minlength="2"></label>
+      <label>Tu nombre<input name="name" autocomplete="name" required></label>
+      <label>Correo<input name="email" type="email" autocomplete="email" required></label>
+      <label>Contraseña (mínimo 8 caracteres)<input name="password" type="password" autocomplete="new-password" required minlength="8"></label>
+      <button class="btn" type="submit">Crear cuenta</button>
+      <p class="hint">¿Ya tienes cuenta? <a href="/login" data-switch>Entra</a></p>
+    </form>
+    <p id="error" class="error" role="alert" hidden></p>
+  </main>
+<script>
+const loginF = document.getElementById("login-form"), regF = document.getElementById("register-form"), err = document.getElementById("error");
+function show(register) { loginF.hidden = register; regF.hidden = !register; err.hidden = true; }
+show(location.pathname === "/registro");
+document.querySelectorAll("[data-switch]").forEach(a => a.addEventListener("click", e => {
+  e.preventDefault(); history.replaceState(null, "", a.getAttribute("href")); show(a.getAttribute("href") === "/registro");
+}));
+async function submit(form, url) {
+  const body = Object.fromEntries(new FormData(form));
+  const btn = form.querySelector("button"); btn.disabled = true;
+  try {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (r.ok) { location.href = "/"; return; }
+    const d = await r.json().catch(() => ({}));
+    err.textContent = typeof d.detail === "string" ? d.detail : "Revisa los datos (la contraseña debe tener mínimo 8 caracteres).";
+    err.hidden = false;
+  } finally { btn.disabled = false; }
+}
+loginF.addEventListener("submit", e => { e.preventDefault(); submit(loginF, "/auth/login"); });
+regF.addEventListener("submit", e => { e.preventDefault(); submit(regF, "/auth/register"); });
+</script>
+</body>
+</html>

@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Integralo</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <img id="brand-logo" alt="" hidden>
+    <span id="brand-mark" class="logo-mark">◆</span>
+    <span id="biz-name">Integralo</span>
+  </div>
+  <nav class="tabs">
+    <button class="tab active" data-tab="resumen">Resumen</button>
+    <button class="tab" data-tab="pedidos">Pedidos</button>
+    <button class="tab" data-tab="mensajes">Mensajes <span class="badge" id="badge-msgs" hidden></span></button>
+    <button class="tab" data-tab="asistente"><span id="assistant-tab">Asistente</span> <span class="badge" id="badge-q" hidden></span></button>
+    <button class="tab" data-tab="productos">Productos</button>
+    <button class="tab" data-tab="configuracion">Configuración</button>
+  </nav>
+  <div class="top-actions">
+    <a class="btn ghost on-bar" href="/api/excel">⬇ Excel</a>
+    <button class="btn ghost on-bar" id="logout" title="Cerrar sesión">Salir</button>
+  </div>
+</header>
+
+<main>
+  <!-- RESUMEN -->
+  <section id="tab-resumen" class="panel active">
+    <div class="kpis" id="kpis"></div>
+    <div class="grid-2">
+      <div class="card">
+        <h3>Ingresos confirmados · últimos 30 días</h3>
+        <div id="chart" class="chart"></div>
+        <details class="table-view"><summary>Ver como tabla</summary><div id="chart-table"></div></details>
+      </div>
+      <div class="card">
+        <h3>Pedidos por estado</h3>
+        <div id="by-status" class="status-list"></div>
+        <h3 class="mt">Por canal</h3>
+        <div id="by-channel"></div>
+      </div>
+    </div>
+    <div class="grid-2 even">
+      <div class="card"><h3>Pagos por verificar</h3><div id="to-verify"></div></div>
+      <div class="card"><h3>Preguntas de clientes esperando tu respuesta</h3><div id="home-questions"></div></div>
+    </div>
+  </section>
+
+  <!-- PEDIDOS -->
+  <section id="tab-pedidos" class="panel">
+    <div class="toolbar">
+      <input id="order-search" type="search" placeholder="Buscar por código, cliente o teléfono">
+      <label class="check"><input type="checkbox" id="show-cancelled"> Mostrar cancelados</label>
+      <button class="btn" id="btn-new-order">+ Nuevo pedido</button>
+    </div>
+    <div class="board" id="board"></div>
+  </section>
+
+  <!-- MENSAJES -->
+  <section id="tab-mensajes" class="panel">
+    <div class="inbox">
+      <aside class="conv-list">
+        <div class="conv-list-head">
+          <strong>Conversaciones</strong>
+          <button class="btn small ghost" id="btn-simulate">🧪 Probar IA</button>
+        </div>
+        <div id="conv-list"></div>
+      </aside>
+      <div class="chat" id="chat"><div class="empty">Selecciona una conversación</div></div>
+    </div>
+  </section>
+
+  <!-- ASISTENTE -->
+  <section id="tab-asistente" class="panel">
+    <div class="assistant-layout">
+      <div class="chat card-like">
+        <div class="chat-head"><span class="avatar" id="assistant-avatar">A</span><div><div class="name" id="assistant-title">Asistente</div>
+          <div class="hint">Pregúntale por ventas, pedidos o pagos, pídele que cambie estados o que le responda a un cliente.</div></div></div>
+        <div class="messages" id="assistant-messages"></div>
+        <div class="suggestions" id="assistant-suggestions"></div>
+        <form class="composer" id="assistant-form">
+          <textarea id="assistant-input" placeholder="Escríbele a tu asistente… (Enter para enviar)"></textarea>
+          <button class="btn" type="submit">Enviar</button>
+        </form>
+      </div>
+      <aside class="card questions-panel">
+        <h3>Preguntas de clientes</h3>
+        <p class="hint">Cuando la IA no sabe algo, te lo pregunta aquí. Respóndele y ella retoma la conversación con el cliente.</p>
+        <div id="questions"></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- PRODUCTOS -->
+  <section id="tab-productos" class="panel">
+    <div class="toolbar">
+      <button class="btn" id="btn-new-product">+ Producto</button>
+      <label class="btn ghost file-btn">Importar desde Excel<input type="file" id="import-file" accept=".xlsx" hidden></label>
+      <button class="btn ghost" id="btn-tn-sync" hidden>↻ Sincronizar con Tiendanube</button>
+      <input id="product-search" type="search" placeholder="Buscar producto">
+    </div>
+    <p class="hint">Excel: columnas <b>Nombre</b>, <b>Precio</b> y opcionales SKU, Stock, Descripción, Variantes, Personalizable (sí/no), Imagen, URL. La IA solo vende lo que está en este catálogo; lo personalizado lo cotiza preguntándote.</p>
+    <div class="card"><div id="products"></div></div>
+  </section>
+
+  <!-- CONFIGURACIÓN -->
+  <section id="tab-configuracion" class="panel">
+    <div id="settings"></div>
+  </section>
+</main>
+
+<footer class="footer">Hecho con <strong>Integralo</strong></footer>
+
+<div class="tooltip" id="tooltip" hidden></div>
+<dialog id="modal"><div id="modal-body"></div></dialog>
+<div id="toast" class="toast" role="status" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
