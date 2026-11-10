@@ -51,6 +51,29 @@ Si usas otro proveedor con Docker (Railway, Render con disco, un VPS), monta un 
 ### IA (Claude)
 Crea la clave en https://console.anthropic.com y ponla en `ANTHROPIC_API_KEY`. La plataforma usa el modelo `claude-opus-5-5`, con esfuerzo bajo para los chats con clientes (respuestas rápidas) y medio para la asistente interna. Si el modelo declina un mensaje, el servidor reintenta con un modelo alternativo. Si aun así no hay respuesta, la conversación pasa a una persona.
 
+### WhatsApp con un clic y en coexistencia (app de Meta de Integralo)
+Así cada tienda conecta **su mismo número** sin perder la app **WhatsApp Business** del celular:
+contesta desde el celular cuando quiera, todo se ve en Integralo y la IA se calla en ese chat mientras la persona atiende.
+
+1. En https://developers.facebook.com crea una app tipo **Empresa (Business)** y agrega el producto **WhatsApp**.
+2. Completa la **verificación del negocio** y el proceso de **Proveedor de Tecnología (Tech Provider)** que pide Meta para usar *Embedded Signup* con otras empresas.
+3. En **Facebook Login for Business → Configuraciones**, crea una configuración de **WhatsApp Embedded Signup**. Activa la opción de incorporar usuarios de la app WhatsApp Business (coexistencia) y copia su **ID** en `META_CONFIG_ID`.
+4. En **Configuración de la app → Básica**, agrega tu dominio en *Dominios de la app* y copia el **ID de la app** en `META_APP_ID` y la **clave secreta** en `META_APP_SECRET`.
+5. En **WhatsApp → Configuración → Webhook**:
+   - URL: `https://TU-DOMINIO/webhooks/meta`
+   - Token de verificación: el valor de `META_VERIFY_TOKEN`
+   - Suscríbete a los campos `messages`, `smb_message_echoes`, `history`, `smb_app_state_sync` y `account_update`.
+6. Reinicia Integralo. En **Configuración → Canales**, cada tienda verá el botón **Conectar mi WhatsApp**.
+
+Al conectar en modo coexistencia:
+- Integralo pide automáticamente los **contactos** y el **historial** (hasta ~6 meses) del celular. Meta solo permite hacerlo **una vez y dentro de las 24 horas** siguientes.
+- Los mensajes que respondes **desde el celular** aparecen como "📱 Desde el celular", y la IA hace una pausa en ese chat. Los minutos de pausa se ajustan en *Tu asistente*.
+- Si pasaron más de 24 horas desde el último mensaje del cliente, WhatsApp no deja que la API le escriba sin una plantilla aprobada. Integralo te avisa y puedes responderle desde el celular, que no tiene esa limitación.
+- Meta pide abrir la app WhatsApp Business del celular al menos una vez cada **14 días** para mantener la coexistencia activa.
+- Los mensajes que envía la API tienen el costo de Meta. Los que envías desde la app del celular siguen siendo gratis.
+
+> Sin la app de plataforma, cada tienda puede conectar WhatsApp **manualmente** con su propia app de Meta (Configuración → Canales → "Conexión manual").
+
 ### Tiendanube (para que cada tienda se conecte con un clic)
 1. Regístrate como socio en https://partners.tiendanube.com y crea una **aplicación**.
 2. Permisos: `read_orders`, `read_products` (y `read_customers` si quieres).
@@ -84,12 +107,12 @@ Todo se hace en **Configuración → Canales**. Ahí cada tienda ve sus propias 
 | Canal | Qué hacer |
 |---|---|
 | **Tiendanube** | Botón **Conectar Tiendanube**. Desde ese momento los pedidos llegan solos (incluido el cambio a *pagado* o *cancelado*) y los diseños de la web se cargan como productos. Con **Traer pedidos de los últimos 30 días** se importan los anteriores. |
-| **WhatsApp** | En developers.facebook.com crea una app *Business*, agrega **WhatsApp** y copia el token permanente y el *Phone number ID*. En *Webhook* pega la URL y el token de verificación que muestra Integralo y suscríbete a `messages`. |
+| **WhatsApp** | Botón **Conectar mi WhatsApp**: abre la ventana de Meta. Elige conectar tu app de WhatsApp Business (coexistencia) y escanea el código QR desde el celular. Si el servidor no tiene la app de plataforma, usa la **conexión manual**: token permanente, *Phone number ID* y webhook de tu propia app de Meta. |
 | **Instagram / Messenger** | En la misma app agrega Messenger e Instagram (la cuenta de Instagram debe ser profesional y estar vinculada a la página). Pega el token de la página y el *App secret*, configura el webhook con la URL de Integralo y suscríbete a `messages`. Para atender a clientes reales, Meta exige la **revisión de la app** (`pages_messaging`, `instagram_manage_messages`). |
 | **TikTok** | Solo para cuentas aprobadas en *TikTok Business Messaging*. La recepción ya está lista; el envío de respuestas (`_send_tiktok` en `app/channels.py`) se completa con la documentación que entregue TikTok. |
 | **Otras webs** | Shopify y WooCommerce: webhook de "pedido creado" a la URL que se muestra. Para cualquier otra web, un POST JSON a la URL "web genérica" (formato en `app/web_orders.py`). |
 
-> **WhatsApp:** al conectar un número a la API, deja de funcionar en la app de WhatsApp Business del celular, salvo que esté disponible la función de coexistencia. Las respuestas se hacen desde Integralo.
+> **WhatsApp:** con la conexión en **coexistencia** el número sigue funcionando en la app WhatsApp Business del celular. Con la conexión manual a un número nuevo, ese número queda solo en Integralo.
 
 ## 6. Cómo se usa el día a día
 
@@ -115,6 +138,7 @@ app/
   service.py      flujos compartidos (mensajes entrantes, avisos al cliente, respuestas de la dueña)
   tiendanube.py   instalación OAuth, webhooks, sincronización de productos y pedidos
   channels.py     envío y recepción por canal
+  whatsapp.py     WhatsApp con un clic, coexistencia (ecos, historial, contactos) y webhooks
   excel.py        Excel por tienda e importación del catálogo
   db.py           base de datos SQLite multi-tienda
   security.py     contraseñas (scrypt), sesiones y cifrado de credenciales

@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import channels, config, db, excel, llm, secretary, security, service, tiendanube, webhooks
+from . import channels, config, db, excel, llm, secretary, security, service, tiendanube, webhooks, whatsapp
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("app")
@@ -28,6 +28,7 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 @app.on_event("startup")
 def _startup():
     db.init_db()
+    whatsapp.start_token_refresher()
     if not llm.available():
         log.warning("ANTHROPIC_API_KEY no configurada: la IA no responderá.")
 
@@ -187,6 +188,12 @@ def public_tenant(t: dict) -> dict:
         "webhooks": {k: f"{base}/{k}" for k in ("whatsapp", "meta", "tiktok", "shopify", "woocommerce", "web")},
         "meta_verify_token": s.get("meta_verify_token") or t["webhook_token"],
         "secrets_set": {k: bool(s.get(k)) for k in db.SECRET_KEYS},
+        "human_pause_minutes": t["human_pause_minutes"], "ai_reply_delay_seconds": t["ai_reply_delay_seconds"],
+        "whatsapp": {
+            "mode": t["whatsapp_mode"] or ("manual" if s.get("whatsapp_token") else ""),
+            "display_phone": t["whatsapp_display_phone"], "connected_at": t["whatsapp_connected_at"],
+            "sync": whatsapp.sync_state(t), "sync_window_open": whatsapp.sync_window_open(t),
+        },
         "channels": {
             "whatsapp": bool(s.get("whatsapp_token") and s.get("whatsapp_phone_number_id")),
             "facebook_instagram": bool(s.get("meta_page_token")),
@@ -200,7 +207,8 @@ def public_tenant(t: dict) -> dict:
 @app.get("/api/me")
 def me(ctx: Ctx = Depends(current)):
     return {"user": ctx.user, "tenant": public_tenant(ctx.tenant), "ia_disponible": llm.available(),
-            "tiendanube_disponible": tiendanube.enabled(), "estados": db.STATUS_LABELS}
+            "tiendanube_disponible": tiendanube.enabled(), "whatsapp_signup": whatsapp.signup_settings(),
+            "estados": db.STATUS_LABELS}
 
 
 class SettingsIn(BaseModel):
@@ -212,6 +220,8 @@ class SettingsIn(BaseModel):
     currency: str | None = Field(None, pattern=r"^[A-Z]{3}$")
     business_info: str | None = Field(None, max_length=20000)
     ai_enabled_default: bool | None = None
+    human_pause_minutes: int | None = Field(None, ge=0, le=1440)
+    ai_reply_delay_seconds: int | None = Field(None, ge=0, le=600)
 
 
 @app.put("/api/settings")
@@ -267,6 +277,42 @@ def add_user(body: UserIn, ctx: Ctx = Depends(owner_only)):
 def remove_user(uid: int, ctx: Ctx = Depends(owner_only)):
     db.delete_user(ctx.tid, uid)
     return {"ok": True}
+
+
+# =========================================================================== WhatsApp con un clic
+
+class SignupIn(BaseModel):
+    code: str = Field(min_length=4, max_length=2000)
+    phone_number_id: str | None = None
+    waba_id: str | None = None
+    coexistence: bool = False
+
+
+@app.post("/api/whatsapp/embedded-signup")
+def whatsapp_signup(body: SignupIn, ctx: Ctx = Depends(owner_only)):
+    if not whatsapp.platform_enabled():
+        raise HTTPException(400, "La conexión de WhatsApp con un clic no está configurada en el servidor.")
+    _rate_limit(f"wa-signup:{ctx.tid}", limit=10)
+    try:
+        result = whatsapp.connect_embedded(ctx.tenant, body.code, body.phone_number_id, body.waba_id, body.coexistence)
+    except whatsapp.MetaError as e:
+        raise HTTPException(400, f"Meta: {e}")
+    return {**result, "tenant": public_tenant(db.get_tenant(ctx.tid))}
+
+
+@app.post("/api/whatsapp/sincronizar")
+def whatsapp_resync(ctx: Ctx = Depends(owner_only)):
+    if ctx.tenant["whatsapp_mode"] != "coexistencia":
+        raise HTTPException(400, "Solo aplica a números en coexistencia.")
+    if not whatsapp.sync_window_open(ctx.tenant):
+        raise HTTPException(400, "Pasaron las 24 horas: para sincronizar de nuevo hay que desconectar y volver a conectar el número.")
+    return {"sync": whatsapp.run_coexistence_sync(ctx.tid)}
+
+
+@app.post("/api/whatsapp/desconectar")
+def whatsapp_disconnect(ctx: Ctx = Depends(owner_only)):
+    whatsapp.disconnect(ctx.tid)
+    return public_tenant(db.get_tenant(ctx.tid))
 
 
 # =========================================================================== Tiendanube
@@ -482,20 +528,24 @@ class TextIn(BaseModel):
 @app.post("/api/conversations/{cid}/reply")
 def manual_reply(cid: int, body: TextIn, ctx: Ctx = Depends(current)):
     try:
-        sent = service.send_to_customer(ctx.tenant, cid, body.text)
+        result = service.send_to_customer(ctx.tenant, cid, body.text)
     except LookupError as e:
         raise HTTPException(404, str(e))
-    return {"enviado": sent}
+    return {"enviado": result.ok, "error": result.error}
 
 
 class ConvSettingsIn(BaseModel):
     ai_enabled: bool | None = None
     needs_human: bool | None = None
+    resume_ai: bool | None = None     # quitar la pausa de la IA
 
 
 @app.post("/api/conversations/{cid}/settings")
 def conversation_settings(cid: int, body: ConvSettingsIn, ctx: Ctx = Depends(current)):
-    fields = {k: int(v) for k, v in body.model_dump().items() if v is not None}
+    data = body.model_dump()
+    fields = {k: int(v) for k, v in data.items() if v is not None and k != "resume_ai"}
+    if data.get("resume_ai") or data.get("needs_human") is False:
+        fields["ai_paused_until"] = None
     conv = db.update_conversation(ctx.tid, cid, **fields)
     if not conv:
         raise HTTPException(404, "Conversación no encontrada")

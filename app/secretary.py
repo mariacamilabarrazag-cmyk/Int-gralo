@@ -126,10 +126,10 @@ class SecretaryTools:
 
     def enviar_mensaje_a_cliente(self, a):
         try:
-            ok = service.send_to_customer(self.t, int(a["conversacion_id"]), a["texto"])
+            result = service.send_to_customer(self.t, int(a["conversacion_id"]), a["texto"])
         except LookupError as e:
             return str(e), True
-        return "Mensaje enviado." if ok else "Mensaje guardado, pero el canal no está conectado: no le llegó al cliente.", False
+        return "Mensaje enviado." if result.ok else f"Mensaje guardado, pero no le llegó al cliente: {result.error}", False
 
     def buscar_productos(self, a):
         prods = db.search_products(self.tid, a.get("consulta", ""))

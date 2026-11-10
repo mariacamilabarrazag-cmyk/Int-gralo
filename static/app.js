@@ -335,6 +335,7 @@ async function loadConversations() {
       <div class="last">${esc(c.last_text || "")}</div>
       <div class="flags">${chChip(c.channel)}${c.needs_human ? `<span class="chip alert">🙋 Atención humana</span>` : ""}
         ${c.waiting_owner ? `<span class="chip waiting">❓ Esperando tu respuesta</span>` : ""}
+        ${isPaused(c) ? `<span class="chip">⏸ IA en pausa</span>` : ""}
         ${!c.ai_enabled ? `<span class="chip">IA apagada</span>` : ""}${c.unread ? `<span class="chip">${c.unread} nuevo(s)</span>` : ""}</div>
     </div>`).join("") || `<p class="hint" style="padding:12px">Aún no hay conversaciones. Usa “Probar IA” para simular un cliente.</p>`;
   if (state.convId) openConversation(state.convId, true);
@@ -342,7 +343,8 @@ async function loadConversations() {
 
 function messageHtml(m) {
   const t = T();
-  const who = { cliente: "Cliente", ia: `🤖 ${t.assistant_name}`, humano: "👤 Equipo", duena: `Respuesta de ${t.owner_title}` }[m.author] || "";
+  const who = { cliente: "Cliente", ia: `🤖 ${t.assistant_name}`, humano: "👤 Equipo", celular: "📱 Desde el celular",
+                sistema_auto: "🔔 Aviso automático", duena: `Respuesta de ${t.owner_title}` }[m.author] || "";
   let media = "";
   if (m.media_ref) media = m.media_kind === "image" || m.media_kind === "sticker"
     ? `<a href="/api/media/${m.id}" target="_blank" rel="noopener"><img class="media" src="/api/media/${m.id}" alt="Imagen del cliente" loading="lazy"></a>`
@@ -367,6 +369,7 @@ async function openConversation(id, keepScroll = false) {
       <span class="name">${esc(c.customer_name || c.phone || c.external_user_id)}</span>${chChip(c.channel)}
       <div class="actions">
         <label class="switch"><input type="checkbox" id="ai-toggle" ${c.ai_enabled ? "checked" : ""}> 🤖 ${esc(T().assistant_name)} responde</label>
+        ${isPaused(c) && !c.needs_human ? `<span class="chip">⏸ IA en pausa hasta ${new Date(c.ai_paused_until).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}</span><button class="btn small ghost" id="resume">▶ Reanudar IA</button>` : ""}
         ${c.needs_human ? `<button class="btn small" id="resolve">✓ Resuelto, devolver a la IA</button>` : `<button class="btn small ghost" id="take">🙋 Tomar conversación</button>`}
       </div>
     </div>
@@ -382,11 +385,12 @@ async function openConversation(id, keepScroll = false) {
   $("#ai-toggle").onchange = (e) => settings({ ai_enabled: e.target.checked });
   $("#resolve") && ($("#resolve").onclick = () => settings({ needs_human: false, ai_enabled: true }));
   $("#take") && ($("#take").onclick = () => settings({ needs_human: true }));
+  $("#resume") && ($("#resume").onclick = () => settings({ resume_ai: true }));
   const send = async () => {
     const text = $("#reply").value.trim();
     if (!text) return;
     const r = await api(`/api/conversations/${id}/reply`, { method: "POST", body: { text } });
-    if (!r.enviado && c.channel !== "simulador") toast("Guardado, pero el canal no está conectado: no le llegó al cliente");
+    if (!r.enviado && c.channel !== "simulador") toast(r.error || "Guardado, pero no le llegó al cliente");
     $("#reply").value = ""; openConversation(id);
   };
   $("#send").onclick = send;
@@ -565,6 +569,9 @@ async function renderSettings() {
         <label class="full">Lo que tu asistente debe saber del negocio
           <textarea name="business_info" rows="10" ${dis} placeholder="${esc(INFO_TEMPLATE)}">${esc(t.business_info)}</textarea></label>
         <label class="check full"><input type="checkbox" name="ai_enabled_default" ${t.ai_enabled_default ? "checked" : ""} ${dis}> Responder automáticamente las conversaciones nuevas</label>
+        <label>Pausar la IA cuando alguien del equipo responde (minutos)<input type="number" name="human_pause_minutes" min="0" max="1440" value="${t.human_pause_minutes}" ${dis}></label>
+        <label>Esperar antes de que la IA responda (segundos)<input type="number" name="ai_reply_delay_seconds" min="0" max="600" value="${t.ai_reply_delay_seconds}" ${dis}></label>
+        <p class="hint full">Si contestas desde el panel o desde la app del celular, ${esc(t.assistant_name)} se queda callada en ese chat los minutos que elijas (0 = no pausar). La espera te da tiempo de responder tú primero; 0 = responde de inmediato.</p>
       </div>
       <p class="hint">${state.me.ia_disponible ? "✓ IA activa en el servidor." : "⚠️ La IA no está configurada en el servidor (falta la clave de Claude)."}</p>
       <div class="row-actions"><button class="btn" data-save="s-assistant" ${dis}>Guardar asistente</button></div>
@@ -574,8 +581,7 @@ async function renderSettings() {
       <h2>Canales</h2><p class="hint">Conecta tu tienda en línea y tus redes. Las direcciones (URL) son privadas de tu cuenta.</p>
       <div class="ch-block"><div class="channel-head"><strong>🛍️ Tiendanube</strong>${status(t.channels.tiendanube)}</div>${tn}</div>
       <div class="ch-block"><div class="channel-head"><strong>🟢 WhatsApp Business</strong>${status(t.channels.whatsapp)}</div>
-        ${copy("URL del webhook (Meta → WhatsApp → Configuración)", t.webhooks.whatsapp)}${copy("Token de verificación", t.meta_verify_token)}
-        <div class="form-grid">${secretInput("whatsapp_token", "Token de acceso permanente")}${secretInput("whatsapp_phone_number_id", "Phone number ID")}</div></div>
+        ${whatsappBlock(t, owner, dis, copy, secretInput)}</div>
       <div class="ch-block"><div class="channel-head"><strong>📸 Instagram y 💬 Messenger</strong>${status(t.channels.facebook_instagram)}</div>
         ${copy("URL del webhook", t.webhooks.meta)}${copy("Token de verificación", t.meta_verify_token)}
         <div class="form-grid">${secretInput("meta_page_token", "Token de la página de Facebook")}${secretInput("meta_app_secret", "App secret de Meta (recomendado)")}</div></div>
@@ -611,7 +617,7 @@ async function renderSettings() {
 
   $$("[data-save]").forEach((b) => b.addEventListener("click", async () => {
     const card = $("#" + b.dataset.save);
-    const body = Object.fromEntries($$("[name]", card).map((i) => [i.name, i.type === "checkbox" ? i.checked : i.value]));
+    const body = Object.fromEntries($$("[name]", card).map((i) => [i.name, i.type === "checkbox" ? i.checked : i.type === "number" ? +i.value || 0 : i.value]));
     await api("/api/settings", { method: "PUT", body });
     state.me = await api("/api/me"); applyTenant(); toast("Guardado ✓");
   }));
@@ -634,6 +640,15 @@ async function renderSettings() {
     e.target.disabled = true;
     try { const r = await api(url, { method: "POST" }); toast(msg(r)); renderSettings(); } finally { e.target.disabled = false; }
   });
+  $("#wa-connect")?.addEventListener("click", connectWhatsApp);
+  $("#wa-resync")?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try { await api("/api/whatsapp/sincronizar", { method: "POST" }); toast("Sincronización solicitada"); renderSettings(); } finally { e.target.disabled = false; }
+  });
+  $("#wa-off")?.addEventListener("click", async () => {
+    if (!confirm("¿Desconectar WhatsApp de Integralo? Tu app del celular sigue funcionando normal.")) return;
+    await api("/api/whatsapp/desconectar", { method: "POST" }); state.me = await api("/api/me"); renderSettings();
+  });
   tnAction("#tn-products", "/api/tiendanube/sincronizar-productos", (r) => `${r.productos} productos sincronizados`);
   tnAction("#tn-orders", "/api/tiendanube/importar-pedidos", (r) => `${r.pedidos} pedidos revisados`);
   $("#tn-off")?.addEventListener("click", async () => {
@@ -653,6 +668,83 @@ async function renderSettings() {
     await api("/api/me/password", { method: "POST", body: Object.fromEntries(new FormData(e.target)) });
     e.target.reset(); toast("Contraseña cambiada ✓");
   });
+}
+
+
+// =================================================================== WhatsApp con un clic (coexistencia)
+function isPaused(c) { return c.ai_paused_until && new Date(c.ai_paused_until) > new Date(); }
+
+function whatsappBlock(t, owner, dis, copy, secretInput) {
+  const wa = t.whatsapp, signup = state.me.whatsapp_signup;
+  const manual = `${copy("URL del webhook (Meta → WhatsApp → Configuración)", t.webhooks.whatsapp)}${copy("Token de verificación", t.meta_verify_token)}
+        <div class="form-grid">${secretInput("whatsapp_token", "Token de acceso permanente")}${secretInput("whatsapp_phone_number_id", "Phone number ID")}</div>`;
+  if (wa.mode === "coexistencia" || wa.mode === "api") {
+    const st = (k) => wa.sync[k]?.ok ? "✓ solicitada" : wa.sync[k]?.error ? `⚠️ ${esc(wa.sync[k].error)}` : "pendiente";
+    const failed = ["smb_app_state_sync", "history"].some((k) => !wa.sync[k]?.ok);
+    return `<p><strong>${esc(wa.display_phone || "Número conectado")}</strong> · ${wa.mode === "coexistencia"
+        ? "Modo <strong>coexistencia</strong>: sigues usando la app de WhatsApp Business en tu celular y todo se ve aquí también."
+        : "Conectado a la API de WhatsApp."}</p>
+      ${wa.mode === "coexistencia" ? `<p class="hint">Contactos del celular: ${st("smb_app_state_sync")} · Historial de chats: ${st("history")}${wa.sync.history_result === "rechazado" ? " (elegiste no compartirlo)" : ""}. El historial llega por partes durante unos minutos.</p>` : ""}
+      <div class="row-actions">${wa.mode === "coexistencia" && failed && wa.sync_window_open ? `<button class="btn small ghost" id="wa-resync" ${dis}>↻ Reintentar sincronización</button>` : ""}
+        <button class="btn small ghost" id="wa-off" ${dis}>Desconectar</button></div>`;
+  }
+  if (signup.enabled) {
+    return `<p class="hint">Conecta el número de tu negocio con un clic. Si ya usas la app <strong>WhatsApp Business</strong> en el celular,
+        elige esa opción en la ventana de Meta y escanea el código QR: seguirás respondiendo desde el celular cuando quieras,
+        y ${esc(t.assistant_name)} verá esas respuestas y se quedará callada en ese chat.</p>
+      <div class="row-actions"><button class="btn" id="wa-connect" ${dis}>Conectar mi WhatsApp</button></div>
+      <details class="mt"><summary class="hint">Conexión manual con tu propia app de Meta</summary>${manual}</details>`;
+  }
+  return `<p class="hint">La conexión con un clic aún no está activada en este servidor de Integralo. Puedes conectar con tu propia app de Meta:</p>${manual}`;
+}
+
+function loadFacebookSdk(cfg) {
+  if (window.FB) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    window.fbAsyncInit = () => { FB.init({ appId: cfg.app_id, autoLogAppEvents: true, xfbml: false, version: cfg.graph_version }); resolve(); };
+    const sc = document.createElement("script");
+    sc.src = "https://connect.facebook.net/es_LA/sdk.js"; sc.async = true; sc.defer = true; sc.crossOrigin = "anonymous";
+    sc.onerror = () => reject(new Error("No se pudo cargar Facebook. ¿Un bloqueador de anuncios?"));
+    document.body.appendChild(sc);
+  });
+}
+
+function isMetaOrigin(origin) {
+  try { const u = new URL(origin); return u.protocol === "https:" && (u.hostname === "facebook.com" || u.hostname.endsWith(".facebook.com")); }
+  catch { return false; }
+}
+
+async function connectWhatsApp() {
+  const cfg = state.me.whatsapp_signup;
+  try { await loadFacebookSdk(cfg); } catch (e) { return toast(e.message); }
+  let session = null;
+  const onMessage = (ev) => {
+    if (!isMetaOrigin(ev.origin)) return;
+    let data;
+    try { data = typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data; } catch { return; }
+    if (!data || data.type !== "WA_EMBEDDED_SIGNUP") return;
+    const d = data.data || {};
+    if (String(data.event).startsWith("FINISH")) {
+      session = { phone_number_id: d.phone_number_id || null, waba_id: d.waba_id || (d.messaging_account_ids || [])[0] || null,
+                  coexistence: data.event === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING" || d.is_on_biz_app === true };
+    } else if (data.event === "CANCEL") {
+      session = { cancelled: true, step: d.current_step || "" };
+    }
+  };
+  window.addEventListener("message", onMessage);
+  FB.login((response) => {
+    (async () => {
+      const code = response?.authResponse?.code;
+      for (let i = 0; i < 30 && !session && code; i++) await new Promise((r) => setTimeout(r, 200)); // el evento puede llegar después
+      window.removeEventListener("message", onMessage);
+      if (!code || session?.cancelled) return toast("Conexión cancelada" + (session?.step ? ` (en el paso ${session.step})` : ""));
+      if (!session?.waba_id) return toast("Meta no devolvió los datos del número. Intenta de nuevo.");
+      toast("Conectando tu WhatsApp…");
+      const r = await api("/api/whatsapp/embedded-signup", { method: "POST", body: { code, ...session } });
+      toast(r.modo === "coexistencia" ? "¡Listo! WhatsApp conectado en coexistencia 🎉" : "¡Listo! WhatsApp conectado 🎉");
+      state.me = await api("/api/me"); renderSettings();
+    })().catch(() => {});
+  }, { config_id: cfg.config_id, response_type: "code", override_default_response_type: true, extras: cfg.extras });
 }
 
 // =================================================================== inicio

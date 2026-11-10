@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import logging
+from dataclasses import dataclass
 
 import httpx
 
@@ -14,49 +15,73 @@ GRAPH = f"https://graph.facebook.com/{config.GRAPH_VERSION}"
 
 # ------------------------------------------------------------------ envío
 
-def send_message(tenant: dict, channel: str, external_user_id: str, text: str) -> bool:
-    """Envía `text` al cliente. Devuelve True si se entregó a la red social (o si es el simulador)."""
+@dataclass
+class SendResult:
+    ok: bool
+    external_id: str | None = None   # id del mensaje en la red social (wamid en WhatsApp)
+    error: str = ""                   # explicación para mostrar en el panel
+
+    def __bool__(self):
+        return self.ok
+
+
+NOT_CONNECTED = "El canal no está conectado: el mensaje no le llegó al cliente (revisa Configuración → Canales)."
+
+
+def send_message(tenant: dict, channel: str, external_user_id: str, text: str) -> SendResult:
+    """Envía `text` al cliente por su canal."""
     s = db.get_secrets(tenant)
     try:
         if channel == "whatsapp":
-            return _send_whatsapp(s, external_user_id, text)
+            return _send_whatsapp(tenant, s, external_user_id, text)
         if channel in ("facebook", "instagram"):
             return _send_meta(s, external_user_id, text)
         if channel == "tiktok":
             return _send_tiktok(s, external_user_id, text)
-        return channel == "simulador"
-    except Exception:
-        log.exception("Error enviando mensaje por %s (tienda %s)", channel, tenant["id"])
-        return False
+        return SendResult(channel == "simulador", error="" if channel == "simulador" else NOT_CONNECTED)
+    except httpx.HTTPError:
+        log.exception("Error de red enviando por %s (tienda %s)", channel, tenant["id"])
+        return SendResult(False, error="No hubo conexión con la red social; intenta de nuevo.")
 
 
-def _send_whatsapp(s: dict, to: str, text: str) -> bool:
+def _send_whatsapp(tenant: dict, s: dict, to: str, text: str) -> SendResult:
     if not (s.get("whatsapp_token") and s.get("whatsapp_phone_number_id")):
-        return False
+        return SendResult(False, error=NOT_CONNECTED)
     r = httpx.post(f"{GRAPH}/{s['whatsapp_phone_number_id']}/messages", timeout=20,
                    headers={"Authorization": f"Bearer {s['whatsapp_token']}"},
                    json={"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": text[:4096]}})
-    if r.status_code >= 400:
-        log.error("WhatsApp respondió %s: %s", r.status_code, r.text[:500])
-    return r.status_code < 400
+    data = r.json() if r.content else {}
+    if r.status_code < 400 and data.get("messages"):
+        return SendResult(True, data["messages"][0].get("id"))
+    err = data.get("error") or {}
+    log.error("WhatsApp respondió %s: %s", r.status_code, str(err)[:400])
+    if err.get("code") == 131047:
+        hint = ("Respóndele desde la app de WhatsApp Business del celular." if tenant.get("whatsapp_mode") == "coexistencia"
+                else "Solo se le puede escribir con una plantilla aprobada por Meta.")
+        return SendResult(False, error=f"Pasaron más de 24 horas desde el último mensaje del cliente. {hint}")
+    return SendResult(False, error=f"WhatsApp rechazó el mensaje: {err.get('message', r.status_code)}")
 
 
-def _send_meta(s: dict, recipient_id: str, text: str) -> bool:
+def _send_meta(s: dict, recipient_id: str, text: str) -> SendResult:
     if not s.get("meta_page_token"):
-        return False
+        return SendResult(False, error=NOT_CONNECTED)
     r = httpx.post(f"{GRAPH}/me/messages", timeout=20, params={"access_token": s["meta_page_token"]},
                    json={"recipient": {"id": recipient_id}, "messaging_type": "RESPONSE", "message": {"text": text[:1000]}})
-    if r.status_code >= 400:
-        log.error("Meta respondió %s: %s", r.status_code, r.text[:500])
-    return r.status_code < 400
+    data = r.json() if r.content else {}
+    if r.status_code < 400:
+        return SendResult(True, data.get("message_id"))
+    log.error("Meta respondió %s: %s", r.status_code, r.text[:400])
+    if (data.get("error") or {}).get("code") == 10:
+        return SendResult(False, error="Pasaron más de 24 horas desde el último mensaje del cliente; respóndele desde la app.")
+    return SendResult(False, error=f"Meta rechazó el mensaje: {(data.get('error') or {}).get('message', r.status_code)}")
 
 
-def _send_tiktok(s: dict, conversation_id: str, text: str) -> bool:
+def _send_tiktok(s: dict, conversation_id: str, text: str) -> SendResult:
     """TikTok Business Messaging solo está disponible para cuentas aprobadas. Completar con la
     documentación que entregue TikTok al aprobar el acceso; mientras tanto se responde desde la app de TikTok."""
     if s.get("tiktok_access_token"):
         log.warning("Envío a TikTok pendiente de implementar con el acceso aprobado de TikTok.")
-    return False
+    return SendResult(False, error="Responder por TikTok desde Integralo estará disponible cuando TikTok apruebe el acceso. Respóndele desde la app de TikTok.")
 
 
 def fetch_whatsapp_media(tenant: dict, media_id: str) -> tuple[bytes, str] | None:
@@ -95,40 +120,6 @@ def verify_hmac_base64(secret: str | None, body: bytes, header: str | None) -> b
 
 # ------------------------------------------------------------------ lectura de webhooks
 # Cada mensaje entrante se normaliza a: {channel, user_id, name, phone, text, media_kind, media_ref}
-
-def parse_whatsapp(payload: dict) -> list[dict]:
-    out = []
-    for entry in payload.get("entry", []):
-        for change in entry.get("changes", []):
-            value = change.get("value", {})
-            names = {c.get("wa_id"): c.get("profile", {}).get("name", "") for c in value.get("contacts", [])}
-            for m in value.get("messages", []):
-                msg = {"channel": "whatsapp", "user_id": m["from"], "name": names.get(m["from"], ""),
-                       "phone": m["from"], "text": "", "media_kind": "", "media_ref": ""}
-                t = m.get("type")
-                if t == "text":
-                    msg["text"] = m["text"]["body"]
-                elif t == "button":
-                    msg["text"] = m["button"].get("text", "")
-                elif t == "interactive":
-                    i = m["interactive"]
-                    msg["text"] = (i.get("button_reply") or i.get("list_reply") or {}).get("title", "")
-                elif t in ("image", "document", "video", "sticker"):
-                    media = m.get(t, {})
-                    msg.update(media_kind=t, media_ref=f"wa:{media.get('id', '')}")
-                    caption = media.get("caption") or media.get("filename") or ""
-                    label = {"image": "una imagen", "document": "un documento", "video": "un video", "sticker": "un sticker"}[t]
-                    msg["text"] = f"[El cliente envió {label}] {caption}".strip()
-                elif t == "audio":
-                    msg.update(media_kind="audio", media_ref=f"wa:{m['audio'].get('id', '')}",
-                               text="[El cliente envió una nota de voz]")
-                elif t == "location":
-                    loc = m["location"]
-                    msg["text"] = f"[Ubicación] {loc.get('address') or ''} ({loc.get('latitude')}, {loc.get('longitude')})"
-                if msg["text"]:
-                    out.append(msg)
-    return out
-
 
 def parse_meta(payload: dict) -> list[dict]:
     """Messenger (object=page) e Instagram (object=instagram)."""

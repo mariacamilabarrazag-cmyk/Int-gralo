@@ -221,6 +221,15 @@ Cómo trabajas:
     return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
 
 
+def _paused(conv: dict) -> bool:
+    return bool(conv.get("ai_paused_until")) and conv["ai_paused_until"] > db.now()
+
+
+def last_reply_id(tid: int, cid: int) -> int | None:
+    m = db.last_message(tid, cid)
+    return m["id"] if m and m["author"] == "ia" else None
+
+
 def build_history(t: dict, tid: int, cid: int) -> list[dict]:
     turns: list[dict] = []
     for m in db.get_messages(tid, cid, HISTORY_LIMIT):
@@ -246,7 +255,7 @@ def generate_reply(tid: int, cid: int) -> str | None:
     with _locks[cid]:
         t = db.get_tenant(tid)
         conv = db.get_conversation(tid, cid)
-        if not conv or not conv["ai_enabled"] or conv["needs_human"]:
+        if not conv or not conv["ai_enabled"] or conv["needs_human"] or _paused(conv):
             return None
         messages = build_history(t, tid, cid)
         if not messages or messages[-1]["role"] != "user":
@@ -262,6 +271,11 @@ def generate_reply(tid: int, cid: int) -> str | None:
         except llm.LLMError as e:
             db.update_conversation(tid, cid, needs_human=1)
             db.add_message(tid, cid, "internal", "sistema", f"⚠️ {e} Responde manualmente.")
+            return None
+        conv = db.get_conversation(tid, cid)
+        if _paused(conv) or conv["needs_human"] or not conv["ai_enabled"]:
+            # mientras la IA pensaba, alguien del equipo respondió o apagó la IA: no hablarle encima
+            db.add_message(tid, cid, "internal", "sistema", "⏸ La IA no envió su respuesta porque alguien del equipo tomó la conversación.")
             return None
         if not reply:
             db.update_conversation(tid, cid, needs_human=1)

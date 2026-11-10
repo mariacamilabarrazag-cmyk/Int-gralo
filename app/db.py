@@ -29,7 +29,7 @@ SECRET_KEYS = [
     "meta_page_token", "meta_app_secret", "meta_verify_token",
     "tiktok_access_token", "tiktok_webhook_secret",
     "shopify_secret", "woocommerce_secret", "web_token",
-    "tiendanube_token",
+    "tiendanube_token", "whatsapp_pin",
 ]
 
 SCHEMA = """
@@ -212,11 +212,43 @@ def tx():
         conn.close()
 
 
+# Columnas agregadas después de la primera versión: se crean solas en bases de datos existentes.
+MIGRATIONS = [
+    ("tenants", "whatsapp_phone_number_id", "TEXT"),        # para enrutar el webhook de la plataforma
+    ("tenants", "whatsapp_waba_id", "TEXT"),
+    ("tenants", "whatsapp_display_phone", "TEXT DEFAULT ''"),
+    ("tenants", "whatsapp_mode", "TEXT DEFAULT ''"),         # '' | 'manual' | 'api' | 'coexistencia'
+    ("tenants", "whatsapp_connected_at", "TEXT"),
+    ("tenants", "whatsapp_token_expires_at", "TEXT"),
+    ("tenants", "smb_sync", "TEXT DEFAULT '{}'"),            # estado de la sincronización de coexistencia
+    ("tenants", "human_pause_minutes", "INTEGER NOT NULL DEFAULT 30"),
+    ("tenants", "ai_reply_delay_seconds", "INTEGER NOT NULL DEFAULT 0"),
+    ("conversations", "ai_paused_until", "TEXT"),
+    ("messages", "external_id", "TEXT"),                      # wamid de WhatsApp (evita duplicados)
+]
+POST_MIGRATION_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS ux_tenant_wa_phone ON tenants(whatsapp_phone_number_id) WHERE whatsapp_phone_number_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_msg_external ON messages(tenant_id, external_id) WHERE external_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS contacts (
+    tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    channel TEXT NOT NULL,
+    external_user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, channel, external_user_id)
+);
+"""
+
+
 def init_db() -> None:
     conn = connect()
     try:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(SCHEMA)
+        for table, column, ddl in MIGRATIONS:
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+        conn.executescript(POST_MIGRATION_SQL)
     finally:
         conn.close()
 
@@ -259,7 +291,10 @@ def create_tenant(name: str, **fields) -> dict:
 
 
 TENANT_FIELDS = {"name", "assistant_name", "owner_title", "brand_primary", "brand_secondary", "logo_file",
-                 "currency", "business_info", "ai_enabled_default", "tiendanube_store_id"}
+                 "currency", "business_info", "ai_enabled_default", "tiendanube_store_id",
+                 "whatsapp_phone_number_id", "whatsapp_waba_id", "whatsapp_display_phone", "whatsapp_mode",
+                 "whatsapp_connected_at", "whatsapp_token_expires_at", "smb_sync",
+                 "human_pause_minutes", "ai_reply_delay_seconds"}
 
 
 def update_tenant(tid: int, fields: dict) -> dict:
@@ -279,7 +314,7 @@ def get_tenant(tid: int) -> dict | None:
 
 
 def get_tenant_by(column: str, value) -> dict | None:
-    assert column in ("webhook_token", "tiendanube_store_id", "slug")
+    assert column in ("webhook_token", "tiendanube_store_id", "slug", "whatsapp_phone_number_id", "whatsapp_waba_id")
     if not value:
         return None
     c = connect()
@@ -653,6 +688,10 @@ def get_or_create_conversation(tid: int, channel: str, external_user_id: str, na
                 c.execute("UPDATE conversations SET customer_name=? WHERE id=?", (name, r["id"]))
                 r["customer_name"] = name
             return r
+        if not name:
+            saved = c.execute("SELECT name FROM contacts WHERE tenant_id=? AND channel=? AND external_user_id=?",
+                              (tid, channel, external_user_id)).fetchone()
+            name = saved["name"] if saved else ""
         cur = c.execute(
             """INSERT INTO conversations (tenant_id, channel, external_user_id, customer_name, phone, ai_enabled,
                created_at, last_message_at) VALUES (?,?,?,?,?,?,?,?)""",
@@ -673,7 +712,7 @@ def list_conversations(tid: int) -> list[dict]:
     try:
         return rows(c.execute(
             """SELECT cv.*, (SELECT text FROM messages m WHERE m.conversation_id = cv.id AND m.direction != 'internal'
-                             ORDER BY m.id DESC LIMIT 1) AS last_text
+                             ORDER BY m.created_at DESC, m.id DESC LIMIT 1) AS last_text
                FROM conversations cv WHERE tenant_id=?
                ORDER BY needs_human DESC, waiting_owner DESC, last_message_at DESC LIMIT 300""", (tid,)))
     finally:
@@ -681,15 +720,24 @@ def list_conversations(tid: int) -> list[dict]:
 
 
 def add_message(tid: int, cid: int, direction: str, author: str, text: str,
-                media_kind: str = "", media_ref: str = "") -> dict:
-    ts = now()
+                media_kind: str = "", media_ref: str = "", external_id: str | None = None,
+                created_at: str | None = None, history: bool = False) -> dict | None:
+    """Guarda un mensaje. Con `external_id` (wamid) no se duplica: devuelve None si ya existía.
+    `history=True` (historial importado) no cuenta como mensaje nuevo sin leer."""
+    ts = created_at or now()
     with tx() as c:
         if not c.execute("SELECT 1 FROM conversations WHERE id=? AND tenant_id=?", (cid, tid)).fetchone():
             raise LookupError("Conversación no encontrada")
+        if external_id and c.execute("SELECT 1 FROM messages WHERE tenant_id=? AND external_id=?",
+                                     (tid, external_id)).fetchone():
+            return None
         cur = c.execute(
-            """INSERT INTO messages (tenant_id, conversation_id, direction, author, text, media_kind, media_ref, created_at)
-               VALUES (?,?,?,?,?,?,?,?)""", (tid, cid, direction, author, text, media_kind, media_ref, ts))
-        if direction == "in":
+            """INSERT INTO messages (tenant_id, conversation_id, direction, author, text, media_kind, media_ref,
+               external_id, created_at) VALUES (?,?,?,?,?,?,?,?,?)""",
+            (tid, cid, direction, author, text, media_kind, media_ref, external_id, ts))
+        if history:
+            c.execute("UPDATE conversations SET last_message_at=MAX(COALESCE(last_message_at,''), ?) WHERE id=?", (ts, cid))
+        elif direction == "in":
             c.execute("UPDATE conversations SET last_message_at=?, unread=unread+1 WHERE id=?", (ts, cid))
         else:
             c.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (ts, cid))
@@ -699,7 +747,7 @@ def add_message(tid: int, cid: int, direction: str, author: str, text: str,
 def get_messages(tid: int, cid: int, limit: int = 200) -> list[dict]:
     c = connect()
     try:
-        msgs = rows(c.execute("SELECT * FROM messages WHERE tenant_id=? AND conversation_id=? ORDER BY id DESC LIMIT ?",
+        msgs = rows(c.execute("SELECT * FROM messages WHERE tenant_id=? AND conversation_id=? ORDER BY created_at DESC, id DESC LIMIT ?",
                               (tid, cid, limit)))
         return list(reversed(msgs))
     finally:
@@ -715,7 +763,7 @@ def get_message(tid: int, mid: int) -> dict | None:
 
 
 def update_conversation(tid: int, cid: int, **fields) -> dict | None:
-    allowed = {"ai_enabled", "needs_human", "waiting_owner", "unread", "customer_name", "phone"}
+    allowed = {"ai_enabled", "needs_human", "waiting_owner", "unread", "customer_name", "phone", "ai_paused_until"}
     sets = {k: v for k, v in fields.items() if k in allowed}
     with tx() as c:
         if sets:
@@ -785,5 +833,59 @@ def get_assistant_messages(tid: int, limit: int = 60) -> list[dict]:
     try:
         return list(reversed(rows(c.execute(
             "SELECT * FROM assistant_messages WHERE tenant_id=? ORDER BY id DESC LIMIT ?", (tid, limit)))))
+    finally:
+        c.close()
+
+
+def message_exists(tid: int, external_id: str) -> bool:
+    c = connect()
+    try:
+        return bool(c.execute("SELECT 1 FROM messages WHERE tenant_id=? AND external_id=?", (tid, external_id)).fetchone())
+    finally:
+        c.close()
+
+
+def set_message_external_id(tid: int, mid: int, external_id: str) -> None:
+    with tx() as c:
+        c.execute("UPDATE messages SET external_id=? WHERE id=? AND tenant_id=?", (external_id, mid, tid))
+
+
+def update_message_text_by_external(tid: int, external_id: str, text: str) -> bool:
+    with tx() as c:
+        cur = c.execute("UPDATE messages SET text=? WHERE tenant_id=? AND external_id=?", (text, tid, external_id))
+        return cur.rowcount > 0
+
+
+def last_message(tid: int, cid: int) -> dict | None:
+    c = connect()
+    try:
+        return one(c.execute("""SELECT * FROM messages WHERE tenant_id=? AND conversation_id=? AND direction!='internal'
+                                ORDER BY created_at DESC, id DESC LIMIT 1""", (tid, cid)))
+    finally:
+        c.close()
+
+
+def save_contact(tid: int, channel: str, external_user_id: str, name: str) -> None:
+    """Libreta de contactos (p. ej. la del celular en coexistencia): nombra las conversaciones."""
+    with tx() as c:
+        c.execute("""INSERT INTO contacts (tenant_id, channel, external_user_id, name) VALUES (?,?,?,?)
+                     ON CONFLICT(tenant_id, channel, external_user_id) DO UPDATE SET name=excluded.name""",
+                  (tid, channel, external_user_id, name))
+        c.execute("""UPDATE conversations SET customer_name=? WHERE tenant_id=? AND channel=? AND external_user_id=?
+                     AND (customer_name IS NULL OR customer_name='')""", (name, tid, channel, external_user_id))
+
+
+def delete_contact(tid: int, channel: str, external_user_id: str) -> None:
+    with tx() as c:
+        c.execute("DELETE FROM contacts WHERE tenant_id=? AND channel=? AND external_user_id=?",
+                  (tid, channel, external_user_id))
+
+
+def tenants_with_whatsapp_token_expiring(before_iso: str) -> list[dict]:
+    c = connect()
+    try:
+        return rows(c.execute("""SELECT * FROM tenants WHERE whatsapp_mode IN ('api','coexistencia')
+                                 AND whatsapp_token_expires_at IS NOT NULL AND whatsapp_token_expires_at < ?""",
+                              (before_iso,)))
     finally:
         c.close()

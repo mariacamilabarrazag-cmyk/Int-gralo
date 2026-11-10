@@ -56,6 +56,14 @@ CLAUDE_MODEL = env("CLAUDE_MODEL", "claude-opus-5-5")
 
 # --- Meta (WhatsApp / Messenger / Instagram) ---
 GRAPH_VERSION = env("GRAPH_VERSION", "v21.0")
+# App de Integralo en Meta (Proveedor de Tecnología). Con estos datos cada tienda conecta su WhatsApp
+# con un clic ("Embedded Signup"), incluido el modo coexistencia con la app de WhatsApp Business.
+META_APP_ID = env("META_APP_ID")
+META_APP_SECRET = env("META_APP_SECRET")
+META_CONFIG_ID = env("META_CONFIG_ID")            # configuración de "Embedded Signup" (Facebook Login for Business)
+META_VERIFY_TOKEN = env("META_VERIFY_TOKEN")      # token de verificación del webhook de la plataforma
+# Opciones "extras" de FB.login. Meta cambia este formato entre versiones; se puede ajustar sin tocar código.
+META_SIGNUP_EXTRAS = env("META_SIGNUP_EXTRAS", '{"version": "v5"}')
 
 # --- Tiendanube (app de Integralo registrada en el Portal de Socios de Tiendanube) ---
 TIENDANUBE_APP_ID = env("TIENDANUBE_APP_ID")

@@ -10,7 +10,7 @@ import secrets
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
-from . import channels, db, excel, service, tiendanube, web_orders
+from . import channels, config, db, excel, service, tiendanube, web_orders, whatsapp
 
 log = logging.getLogger("webhooks")
 router = APIRouter()
@@ -38,15 +38,53 @@ def meta_verify(token: str, request: Request):
 
 @router.post("/w/{token}/whatsapp")
 @router.post("/w/{token}/meta")
-async def meta_webhook(token: str, request: Request):
+async def meta_webhook(token: str, request: Request, background: BackgroundTasks):
+    """Webhook de una tienda que conectó su propia app de Meta (conexión manual)."""
     t, s = _tenant(token)
     body = await request.body()
     if not channels.verify_meta_signature(s.get("meta_app_secret"), body, request.headers.get("x-hub-signature-256")):
         raise HTTPException(401, "Firma inválida")
     payload = await request.json()
-    msgs = channels.parse_whatsapp(payload) if payload.get("object") == "whatsapp_business_account" else channels.parse_meta(payload)
-    for m in msgs:
-        service.handle_incoming(t, m)
+    if payload.get("object") == "whatsapp_business_account":
+        for entry in payload.get("entry", []):
+            for change in entry.get("changes", []):
+                background.add_task(whatsapp.handle_change, t, change.get("field", ""), change.get("value") or {})
+    else:
+        for m in channels.parse_meta(payload):
+            service.handle_incoming(t, m)
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ WhatsApp de la plataforma (conexión con un clic)
+
+@router.get("/webhooks/meta")
+def platform_meta_verify(request: Request):
+    p = request.query_params
+    if (config.META_VERIFY_TOKEN and p.get("hub.mode") == "subscribe"
+            and secrets.compare_digest(p.get("hub.verify_token", ""), config.META_VERIFY_TOKEN)):
+        return PlainTextResponse(p.get("hub.challenge", ""))
+    raise HTTPException(403, "Token de verificación incorrecto")
+
+
+@router.post("/webhooks/meta")
+async def platform_meta_webhook(request: Request, background: BackgroundTasks):
+    """Una sola URL para todas las tiendas conectadas con la app de Integralo: cada cambio se
+    enruta a la tienda dueña del número."""
+    if not config.META_APP_SECRET:
+        raise HTTPException(404, "No encontrado")
+    body = await request.body()
+    if not channels.verify_meta_signature(config.META_APP_SECRET, body, request.headers.get("x-hub-signature-256")):
+        raise HTTPException(401, "Firma inválida")
+    payload = await request.json()
+    if payload.get("object") != "whatsapp_business_account":
+        return {"ok": True}
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            tenant = whatsapp.route_platform_change(entry, change)
+            if tenant:
+                background.add_task(whatsapp.handle_change, tenant, change.get("field", ""), change.get("value") or {})
+            else:
+                log.warning("Webhook de WhatsApp sin tienda asociada (campo %s)", change.get("field"))
     return {"ok": True}
 
 
