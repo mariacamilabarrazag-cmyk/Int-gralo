@@ -93,6 +93,11 @@ def index(request: Request):
     return FileResponse(STATIC / "index.html")
 
 
+@app.get("/salud")
+def health():
+    return {"ok": True}
+
+
 @app.get("/login")
 @app.get("/registro")
 def login_page():

@@ -38,11 +38,11 @@ Abre http://localhost:8000/registro y crea la cuenta de una tienda de prueba. En
 
 ## 2. Publicar en internet
 
-Las redes sociales y Tiendanube necesitan una dirección pública con **https**. El proyecto trae un `Dockerfile` que funciona en Railway, Render, Fly.io o un VPS:
+Las redes sociales y Tiendanube necesitan una dirección pública con **https**.
 
-- Monta un **volumen persistente** en `/data` (ahí quedan la base de datos, los Excel y los logos).
-- Define las variables de entorno del `.env.example`. Como mínimo: `PUBLIC_URL`, `SECRET_KEY` y `ANTHROPIC_API_KEY`.
-- **Haz copias de seguridad de `/data`.**
+👉 **Guía paso a paso para publicarla gratis en Oracle Cloud: [DESPLIEGUE.md](DESPLIEGUE.md)**. Un script (`deploy/instalar.sh`) instala todo: Docker, HTTPS automático con Caddy, subdominio gratis de DuckDNS y respaldos diarios.
+
+Si usas otro proveedor con Docker (Railway, Render con disco, un VPS), monta un **volumen persistente** en `/data` y define las variables del `.env.example`. Como mínimo: `PUBLIC_URL`, `SECRET_KEY` y `ANTHROPIC_API_KEY`.
 
 > Si cambias `SECRET_KEY` después de empezar, se pierden las credenciales guardadas de todas las tiendas y las sesiones abiertas.
 
@@ -119,7 +119,8 @@ app/
   db.py           base de datos SQLite multi-tienda
   security.py     contraseñas (scrypt), sesiones y cifrado de credenciales
 static/           panel web (HTML/CSS/JS sin dependencias)
-scripts/          crear_tienda.py
+scripts/          crear_tienda.py, respaldo.py
+deploy/           docker-compose + Caddy (HTTPS), instalar.sh, actualizar.sh
 ```
 
 **Seguridad:**

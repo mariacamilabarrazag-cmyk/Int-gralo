@@ -1,0 +1,40 @@
+# Integralo en producción: la app + Caddy (HTTPS automático con Let's Encrypt).
+# Se usa desde la raíz del proyecto:
+#   docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
+services:
+  app:
+    build: ..
+    env_file: ../.env
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - integralo-data:/data
+    restart: unless-stopped
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/salud', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  caddy:
+    image: caddy:2.8-alpine
+    depends_on:
+      - app
+    environment:
+      DOMAIN: ${DOMAIN:?Define DOMAIN en .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  integralo-data:
+  caddy-data:
+  caddy-config:
