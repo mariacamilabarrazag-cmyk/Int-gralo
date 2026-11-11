@@ -14,6 +14,8 @@ Es **multi-tienda**: cada negocio tiene su propia cuenta, su equipo y sus datos,
 
 ---
 
+> 📋 **Estado del proyecto, decisiones y pendientes:** [docs/ESTADO_DEL_PROYECTO.md](docs/ESTADO_DEL_PROYECTO.md)
+
 ## Índice
 1. [Instalar y probar en tu computador](#1-instalar-y-probar-en-tu-computador)
 2. [Publicar en internet](#2-publicar-en-internet)
@@ -40,7 +42,7 @@ Abre http://localhost:8000/registro y crea la cuenta de una tienda de prueba. En
 
 Las redes sociales y Tiendanube necesitan una dirección pública con **https**.
 
-👉 **Guía paso a paso para publicarla gratis en Oracle Cloud: [DESPLIEGUE.md](DESPLIEGUE.md)**. Un script (`deploy/instalar.sh`) instala todo: Docker, HTTPS automático con Caddy, subdominio gratis de DuckDNS y respaldos diarios.
+👉 **Guía paso a paso para publicarla gratis (Google Cloud u Oracle): [DESPLIEGUE.md](DESPLIEGUE.md)**. Un script (`deploy/instalar.sh`) instala todo: Docker, HTTPS automático con Caddy, subdominio gratis de DuckDNS y respaldos diarios.
 
 Si usas otro proveedor con Docker (Railway, Render con disco, un VPS), monta un **volumen persistente** en `/data` y define las variables del `.env.example`. Como mínimo: `PUBLIC_URL`, `SECRET_KEY` y `ANTHROPIC_API_KEY`.
 

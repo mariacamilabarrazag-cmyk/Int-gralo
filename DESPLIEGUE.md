@@ -1,4 +1,4 @@
-# Publicar Integralo gratis (Oracle Cloud + HTTPS)
+# Publicar Integralo gratis (Google Cloud u Oracle Cloud + HTTPS)
 
 Esta guía deja Integralo funcionando en internet **sin pagar**:
 
@@ -11,6 +11,26 @@ Tiempo estimado: 30 a 45 minutos la primera vez.
 > **Ojo:** los planes gratuitos cambian. Al crear la cuenta, confirma que el servidor diga **"Always Free-eligible"**.
 
 ---
+
+## Opción recomendada: Google Cloud (e2-micro "Always Free")
+
+1. **Cuenta:** https://cloud.google.com/free → *Comienza gratis*. Se elige el país y se agrega una tarjeta, solo para verificación.
+2. **Alerta de gasto:** https://console.cloud.google.com/billing/budgets → *Crear presupuesto* → *Solo alertas*, importe **1 USD**. Deja marcados los créditos y ahorros: así solo avisa si hay cobro real.
+3. **Servidor:** https://console.cloud.google.com/compute/instancesAdd
+   - Región **us-east1** (solo `us-east1`, `us-central1` y `us-west1` son gratis).
+   - Serie **E2**, tipo **e2-micro**.
+   - *SO y almacenamiento*: **Ubuntu 24.04 LTS x86-64** (no "Minimal" ni ARM64), **Disco persistente estándar**, **30 GB**.
+   - *Protección de datos*: sin programación de instantáneas, porque cobran.
+   - *Herramientas de redes*: marca **Permitir tráfico HTTP** y **HTTPS**.
+   - El costo estimado que se ve (~USD 6) se descuenta en la factura por el nivel gratuito.
+4. **Dominio gratis:** Paso 4 de abajo (DuckDNS), con la **IP externa** del servidor.
+5. **Entrar al servidor:** en la lista de instancias, botón **SSH**. Se abre una terminal en el navegador, sin llaves.
+6. Sigue con el **Paso 6** (descargar el código) y el **Paso 7** (instalar). El firewall ya quedó abierto con las casillas HTTP/HTTPS.
+7. **Antes de los 90 días:** https://console.cloud.google.com/billing → **Activar cuenta completa**, para que no se apague el servidor al terminar la prueba. Sigue costando $0 dentro del nivel gratuito.
+
+---
+
+## Opción alternativa: Oracle Cloud "Always Free"
 
 ## Paso 1. Crear la cuenta de Oracle Cloud
 
