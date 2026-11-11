@@ -10,7 +10,9 @@ const state = { tab: "resumen", convId: null, products: [], me: null, estados: {
 
 const T = () => state.me.tenant;
 const isOwner = () => state.me.user.role === "dueno";
-const money = (n) => new Intl.NumberFormat("es-CO", { style: "currency", currency: T()?.currency || "COP", maximumFractionDigits: 0 }).format(n || 0);
+const LOCALES = { COP: "es-CO", CLP: "es-CL", MXN: "es-MX", PEN: "es-PE", ARS: "es-AR", USD: "es-US", EUR: "es-ES" };
+const money = (n) => { const cur = T()?.currency || "COP";
+  return new Intl.NumberFormat(LOCALES[cur] || "es", { style: "currency", currency: cur, maximumFractionDigits: cur === "USD" || cur === "EUR" ? 2 : 0 }).format(n || 0); };
 const fdate = (s) => s ? new Date(s).toLocaleString("es-CO", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
 
 async function api(path, opts = {}) {
